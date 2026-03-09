@@ -6,7 +6,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (Set to True locally to train and save model; False for Streamlit deployment)
-FINE_TUNE_MODE = True  # Change to True for local fine-tuning
+FINE_TUNE_MODE = False  # Change to True for local fine-tuning
 
 # Get absolute path to repo root (works on local and Streamlit Cloud)
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -70,9 +70,16 @@ def fine_tune_model():
     progress_bar.progress(40)
     
     def tokenize_function(examples):
-        return tokenizer(examples['prompt'], padding='max_length', truncation=True, max_length=256)
+        tokenized = tokenizer(examples['prompt'], padding='max_length', truncation=True, max_length=256)
+        tokenized['labels'] = tokenized['input_ids'].copy()  # Add labels (copy of input_ids for causal LM loss)
+        return tokenized
     
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    
+    # Check if labels are present
+    if 'labels' not in tokenized_dataset['train'].column_names:
+        st.error("Labels not added to dataset! Fine-tuning cannot proceed.")
+        return
     
     # Model
     model = AutoModelForCausalLM.from_pretrained('distilgpt2')
