@@ -1,3 +1,4 @@
 streamlit==1.38.0
-# No Torch or Transformers - avoids compilation errors
-# Add back once Streamlit fixes env or for local use
+transformers==4.44.2
+torch==2.0.1  # Compatible version for Streamlit Cloud (CPU)
+datasets==2.21.0  # If needed for any scripts, but optional for app
