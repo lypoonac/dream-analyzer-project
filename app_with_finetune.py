@@ -6,7 +6,10 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (Set to True locally to train and save model; False for Streamlit deployment)
-FINE_TUNE_MODE = False  # Change to True for local fine-tuning
+FINE_TUNE_MODE = True  # Change to True for local fine-tuning
+
+# Get absolute path to repo root (works on local and Streamlit Cloud)
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Fine-tuning function (saves to local folder)
 def fine_tune_model():
@@ -19,11 +22,12 @@ def fine_tune_model():
     progress_bar.progress(10)
     
     # Load dataset with error check
-    if not os.path.exists('data/base_zhou_gong.csv'):
-        st.error("Dataset file 'data/base_zhou_gong.csv' not found! Add it to the repo.")
+    csv_path = os.path.join(REPO_ROOT, 'data/base_zhou_gong.csv')
+    if not os.path.exists(csv_path):
+        st.error(f"Dataset file '{csv_path}' not found! Add it to the repo.")
         return
     
-    df = pd.read_csv('data/base_zhou_gong.csv')
+    df = pd.read_csv(csv_path)
     if 'dream_text' not in df.columns or 'interpretation' not in df.columns:
         st.error("CSV must have 'dream_text' and 'interpretation' columns!")
         return
@@ -47,12 +51,12 @@ def fine_tune_model():
             progress_bar.progress(10 + int(20 * (i / len(df))))
     
     combined_df = pd.DataFrame(combined_data)
-    combined_df.to_csv('combined_training_data.csv', index=False)
+    combined_df.to_csv(os.path.join(REPO_ROOT, 'combined_training_data.csv'), index=False)
     
     status_text.text("Step 2: Loading dataset for training...")
     progress_bar.progress(30)
     
-    dataset = load_dataset('csv', data_files='combined_training_data.csv')
+    dataset = load_dataset('csv', data_files=os.path.join(REPO_ROOT, 'combined_training_data.csv'))
     if len(dataset['train']) == 0:
         st.error("Generated dataset is empty! Check CSV data.")
         return
@@ -75,7 +79,7 @@ def fine_tune_model():
     
     # Training args
     training_args = TrainingArguments(
-        output_dir='./results',
+        output_dir=os.path.join(REPO_ROOT, 'results'),
         num_train_epochs=5,
         per_device_train_batch_size=4,
         evaluation_strategy='epoch',
@@ -99,8 +103,8 @@ def fine_tune_model():
     progress_bar.progress(90)
     
     # Save locally (commit this folder to GitHub for deployment)
-    trainer.save_model('fine_tuned_combined')
-    tokenizer.save_pretrained('fine_tuned_combined')
+    trainer.save_model(os.path.join(REPO_ROOT, 'fine_tuned_combined'))
+    tokenizer.save_pretrained(os.path.join(REPO_ROOT, 'fine_tuned_combined'))
     
     progress_bar.progress(100)
     status_text.text("Fine-tuning complete. Model saved to 'fine_tuned_combined' folder. Commit to GitHub.")
@@ -113,7 +117,15 @@ if FINE_TUNE_MODE:
 # Cache for performance
 @st.cache_resource
 def load_generation_model():
-    path = 'fine_tuned_combined' if not FINE_TUNE_MODE else 'distilgpt2'  # Loads from local folder in repo
+    # Load from local saved folder (absolute path for reliability)
+    if FINE_TUNE_MODE:
+        path = 'distilgpt2'  # Base model during training
+    else:
+        path = os.path.join(REPO_ROOT, 'fine_tuned_combined')  # Saved model for deployment
+        if not os.path.exists(path):
+            st.error(f"Fine-tuned model folder '{path}' not found! Commit it to GitHub.")
+            return None, None
+    
     tokenizer = AutoTokenizer.from_pretrained(path, clean_up_tokenization_spaces=False)  # Fixes issue #31884
     model = AutoModelForCausalLM.from_pretrained(path)
     return tokenizer, model
@@ -122,8 +134,11 @@ def load_generation_model():
 def load_stress_pipeline():
     return pipeline('text-classification', model='bhadresh-savani/distilbert-base-uncased-emotion')
 
-# Load models
+# Load models (skip if path error)
 gen_tokenizer, gen_model = load_generation_model()
+if gen_tokenizer is None or gen_model is None:
+    st.stop()  # Halt app if model load fails
+
 stress_classifier = load_stress_pipeline()
 
 # Pipeline 1: Detect stress (pre-trained HF model)
