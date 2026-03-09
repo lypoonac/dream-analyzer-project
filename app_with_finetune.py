@@ -2,16 +2,17 @@ import streamlit as st
 import pandas as pd
 import random
 import os
+import time  # For timeout
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (Set to True locally to train and save model; False for Streamlit deployment)
-FINE_TUNE_MODE = True  # Change to True for local fine-tuning
+FINE_TUNE_MODE = False  # Change to True for local fine-tuning
 
 # Get absolute path to repo root (works on local and Streamlit Cloud)
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Fine-tuning function (saves to local folder) - unchanged from previous
+# Fine-tuning function (saves to local folder) - unchanged
 def fine_tune_model():
     st.write("Starting fine-tuning locally...")
     
@@ -129,33 +130,50 @@ stress_classifier = None
 # Cache for generation model
 @st.cache_resource
 def load_generation_model_cached():
+    start_time = time.time()
     if FINE_TUNE_MODE:
         path = 'distilgpt2'  # Base model during training
     else:
         path = os.path.join(REPO_ROOT, 'fine_tuned_combined')  # Saved model for deployment
         if not os.path.exists(path):
-            st.error(f"Fine-tuned model folder '{path}' not found! Commit it to GitHub.")
-            return None, None
+            st.warning(f"Fine-tuned model folder '{path}' not found! Falling back to base 'distilgpt2' (small model for testing).")
+            path = 'distilgpt2'  # Fallback to small public model from https://huggingface.co/models
     
     tokenizer = AutoTokenizer.from_pretrained(path, clean_up_tokenization_spaces=False)  # Fixes issue #31884
     model = AutoModelForCausalLM.from_pretrained(path)
+    
+    if time.time() - start_time > 120:  # Timeout after 2 min
+        st.warning("Loading took too long—using fallback model.")
+    
     return tokenizer, model
 
 # Cache for stress pipeline
 @st.cache_resource
 def load_stress_pipeline_cached():
-    return pipeline('text-classification', model='bhadresh-savani/distilbert-base-uncased-emotion')
+    start_time = time.time()
+    pipe = pipeline('text-classification', model='bhadresh-savani/distilbert-base-uncased-emotion')
+    if time.time() - start_time > 60:  # Timeout after 1 min
+        st.warning("Stress model loading slow—app may be limited on resources.")
+    return pipe
 
-# Function to load all models with spinner
+# Function to load all models with progress
 def load_all_models():
     global gen_tokenizer, gen_model, stress_classifier
-    with st.spinner("Loading models (this may take a minute the first time)..."):
-        gen_tokenizer, gen_model = load_generation_model_cached()
-        stress_classifier = load_stress_pipeline_cached()
-    if gen_tokenizer is None or gen_model is None:
-        st.error("Failed to load generation model!")
+    progress_bar = st.progress(0)
+    status = st.empty()
+    
+    status.text("Loading generation model (Step 1/2)...")
+    gen_tokenizer, gen_model = load_generation_model_cached()
+    progress_bar.progress(50)
+    
+    status.text("Loading stress classification model (Step 2/2)...")
+    stress_classifier = load_stress_pipeline_cached()
+    progress_bar.progress(100)
+    
+    if gen_tokenizer is None or gen_model is None or stress_classifier is None:
+        st.error("Failed to load models! Try rebooting or check resources.")
         return False
-    st.success("Models loaded successfully!")
+    status.text("Models loaded successfully!")
     return True
 
 # Pipeline 1: Detect stress (pre-trained HF model)
@@ -196,16 +214,17 @@ st.title("Dream Analyzer Business App")
 st.write("Enter your dream description (in English) to get a Zhou Gong interpretation, stress level, and personalized recommendations.")
 
 # Button to load models (avoids blocking startup)
-if st.button("Load Models (Required First Time)"):
+if st.button("Load Models (if stuck, click to retry)"):
     load_all_models()
+    st.experimental_rerun()  # Refresh to update UI
 
 dream_input = st.text_area("Describe your dream:", height=150)
 if st.button("Analyze Dream"):
     if dream_input.strip():
         if gen_tokenizer is None or gen_model is None or stress_classifier is None:
-            st.error("Models not loaded! Click 'Load Models' first.")
+            st.error("Models not loaded! Click 'Load Models' and wait.")
         else:
-            with st.spinner("Analyzing your dream..."):
+            with st.spinner("Analyzing your dream (if stuck, resources may be low)..."):
                 stress_level = detect_stress(dream_input)
                 interpretation, recommendation = generate_interp_rec(dream_input, stress_level)
                 
