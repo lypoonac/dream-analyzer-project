@@ -1,3 +1,3 @@
 streamlit==1.38.0
-transformers==4.44.2
-torch
+# No Torch or Transformers - avoids compilation errors
+# Add back once Streamlit fixes env or for local use
