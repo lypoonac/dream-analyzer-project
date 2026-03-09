@@ -136,8 +136,8 @@ def load_generation_model_cached():
     else:
         path = os.path.join(REPO_ROOT, 'fine_tuned_combined')  # Saved model for deployment
         if not os.path.exists(path):
-            st.warning(f"Fine-tuned model folder '{path}' not found! Falling back to base 'distilgpt2' (small model for testing).")
-            path = 'distilgpt2'  # Fallback to small public model from https://huggingface.co/models
+            st.warning(f"Fine-tuned model folder '{path}' not found! Falling back to small 'gpt2' model (from https://huggingface.co/models).")
+            path = 'gpt2'  # Small fallback model (124M params, text generation) from HF Models page
     
     tokenizer = AutoTokenizer.from_pretrained(path, clean_up_tokenization_spaces=False)  # Fixes issue #31884
     model = AutoModelForCausalLM.from_pretrained(path)
@@ -216,7 +216,10 @@ st.write("Enter your dream description (in English) to get a Zhou Gong interpret
 # Button to load models (avoids blocking startup)
 if st.button("Load Models (if stuck, click to retry)"):
     load_all_models()
-    st.experimental_rerun()  # Refresh to update UI
+    try:
+        st.rerun()  # Refresh to update UI (fixed from experimental_rerun)
+    except:
+        pass  # If rerun not needed, continue
 
 dream_input = st.text_area("Describe your dream:", height=150)
 if st.button("Analyze Dream"):
