@@ -1,5 +1,6 @@
 streamlit==1.38.0
 transformers==4.44.2
-torch==2.0.1  # Compatible with 3.10, CPU-only for Streamlit
-datasets==2.21.0  # For fine-tuning (optional for runtime)
-pillow==10.0.0  # Older version to avoid build errors
+torch==2.0.1  # CPU-compatible for Streamlit
+datasets==2.21.0  # For fine-tuning if used
+numpy==1.26.4  # Compatible with Python 3.10 and Transformers (avoids version warnings)
+pillow==10.0.0  # To avoid build issues
