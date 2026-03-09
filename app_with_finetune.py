@@ -6,12 +6,12 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (Set to True locally to train and save model; False for Streamlit deployment)
-FINE_TUNE_MODE = True  # Change to True for local fine-tuning
+FINE_TUNE_MODE = False  # Change to True for local fine-tuning
 
 # Get absolute path to repo root (works on local and Streamlit Cloud)
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Fine-tuning function (saves to local folder)
+# Fine-tuning function (saves to local folder) - unchanged from previous
 def fine_tune_model():
     st.write("Starting fine-tuning locally...")
     
@@ -71,7 +71,7 @@ def fine_tune_model():
     
     def tokenize_function(examples):
         tokenized = tokenizer(examples['prompt'], padding='max_length', truncation=True, max_length=256)
-        tokenized['labels'] = tokenized['input_ids'].copy()  # Add labels (copy of input_ids for causal LM loss)
+        tokenized['labels'] = tokenized['input_ids'].copy()  # Add labels for causal LM loss
         return tokenized
     
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
@@ -121,10 +121,14 @@ def fine_tune_model():
 if FINE_TUNE_MODE:
     fine_tune_model()
 
-# Cache for performance
+# Global variables for models (loaded on demand)
+gen_tokenizer = None
+gen_model = None
+stress_classifier = None
+
+# Cache for generation model
 @st.cache_resource
-def load_generation_model():
-    # Load from local saved folder (absolute path for reliability)
+def load_generation_model_cached():
     if FINE_TUNE_MODE:
         path = 'distilgpt2'  # Base model during training
     else:
@@ -137,16 +141,22 @@ def load_generation_model():
     model = AutoModelForCausalLM.from_pretrained(path)
     return tokenizer, model
 
+# Cache for stress pipeline
 @st.cache_resource
-def load_stress_pipeline():
+def load_stress_pipeline_cached():
     return pipeline('text-classification', model='bhadresh-savani/distilbert-base-uncased-emotion')
 
-# Load models (skip if path error)
-gen_tokenizer, gen_model = load_generation_model()
-if gen_tokenizer is None or gen_model is None:
-    st.stop()  # Halt app if model load fails
-
-stress_classifier = load_stress_pipeline()
+# Function to load all models with spinner
+def load_all_models():
+    global gen_tokenizer, gen_model, stress_classifier
+    with st.spinner("Loading models (this may take a minute the first time)..."):
+        gen_tokenizer, gen_model = load_generation_model_cached()
+        stress_classifier = load_stress_pipeline_cached()
+    if gen_tokenizer is None or gen_model is None:
+        st.error("Failed to load generation model!")
+        return False
+    st.success("Models loaded successfully!")
+    return True
 
 # Pipeline 1: Detect stress (pre-trained HF model)
 def detect_stress(dream_text):
@@ -185,20 +195,27 @@ def generate_interp_rec(dream_text, stress_level):
 st.title("Dream Analyzer Business App")
 st.write("Enter your dream description (in English) to get a Zhou Gong interpretation, stress level, and personalized recommendations.")
 
+# Button to load models (avoids blocking startup)
+if st.button("Load Models (Required First Time)"):
+    load_all_models()
+
 dream_input = st.text_area("Describe your dream:", height=150)
 if st.button("Analyze Dream"):
     if dream_input.strip():
-        with st.spinner("Analyzing your dream..."):
-            stress_level = detect_stress(dream_input)
-            interpretation, recommendation = generate_interp_rec(dream_input, stress_level)
-            
-            st.subheader("Estimated Stress Level")
-            st.write(stress_level)
-            
-            st.subheader("Zhou Gong Interpretation")
-            st.write(interpretation)
-            
-            st.subheader("Personalized Recommendation")
-            st.write(recommendation)
+        if gen_tokenizer is None or gen_model is None or stress_classifier is None:
+            st.error("Models not loaded! Click 'Load Models' first.")
+        else:
+            with st.spinner("Analyzing your dream..."):
+                stress_level = detect_stress(dream_input)
+                interpretation, recommendation = generate_interp_rec(dream_input, stress_level)
+                
+                st.subheader("Estimated Stress Level")
+                st.write(stress_level)
+                
+                st.subheader("Zhou Gong Interpretation")
+                st.write(interpretation)
+                
+                st.subheader("Personalized Recommendation")
+                st.write(recommendation)
     else:
         st.error("Please enter a dream description.")
