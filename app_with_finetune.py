@@ -5,7 +5,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (False for Streamlit Cloud deployment; True locally with Python 3.10)
-FINE_TUNE_MODE = False
+FINE_TUNE_MODE = True
 
 # Fine-tuning function (uses base_zhou_gong.csv)
 def fine_tune_model():
