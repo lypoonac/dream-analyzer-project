@@ -1,20 +1,34 @@
 import streamlit as st
 import pandas as pd
 import random
+import os
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (Set to True locally to train and save model; False for Streamlit deployment)
-FINE_TUNE_MODE = True  # Change to True for local fine-tuning
+FINE_TUNE_MODE = False  # Change to True for local fine-tuning
 
 # Fine-tuning function (saves to local folder)
 def fine_tune_model():
     st.write("Starting fine-tuning locally...")
     
-    # Load dataset
-    df = pd.read_csv('data/base_zhou_gong.csv')
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    # Synthetic data for combined prompts
+    status_text.text("Step 1: Loading and preparing dataset...")
+    progress_bar.progress(10)
+    
+    # Load dataset with error check
+    if not os.path.exists('data/base_zhou_gong.csv'):
+        st.error("Dataset file 'data/base_zhou_gong.csv' not found! Add it to the repo.")
+        return
+    
+    df = pd.read_csv('data/base_zhou_gong.csv')
+    if 'dream_text' not in df.columns or 'interpretation' not in df.columns:
+        st.error("CSV must have 'dream_text' and 'interpretation' columns!")
+        return
+    
+    # Synthetic data
     stress_levels = ['Low', 'Medium', 'High']
     rec_templates = [
         "Practice mindfulness to maintain calm.",
@@ -23,22 +37,33 @@ def fine_tune_model():
     ]
     
     combined_data = []
-    for _, row in df.iterrows():
+    for i, (_, row) in enumerate(df.iterrows()):
         stress = random.choice(stress_levels)
         rec = random.choice(rec_templates)
         prompt = f"Dream: {row['dream_text']} Interpretation: {row['interpretation']} Stress: {stress} Recommendation: {rec}"
         combined_data.append({'prompt': prompt})
+        # Update progress every 10%
+        if i % max(1, len(df) // 10) == 0:
+            progress_bar.progress(10 + int(20 * (i / len(df))))
     
     combined_df = pd.DataFrame(combined_data)
     combined_df.to_csv('combined_training_data.csv', index=False)
     
-    # Load for training
+    status_text.text("Step 2: Loading dataset for training...")
+    progress_bar.progress(30)
+    
     dataset = load_dataset('csv', data_files='combined_training_data.csv')
+    if len(dataset['train']) == 0:
+        st.error("Generated dataset is empty! Check CSV data.")
+        return
     dataset = dataset['train'].train_test_split(test_size=0.2)
     
-    # Tokenizer with fix for invertibility warning (issue #31884)
+    # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained('distilgpt2', clean_up_tokenization_spaces=False)
     tokenizer.pad_token = tokenizer.eos_token
+    
+    status_text.text("Step 3: Tokenizing dataset...")
+    progress_bar.progress(40)
     
     def tokenize_function(examples):
         return tokenizer(examples['prompt'], padding='max_length', truncation=True, max_length=256)
@@ -65,13 +90,21 @@ def fine_tune_model():
         eval_dataset=tokenized_dataset['test'],
     )
     
+    status_text.text("Step 4: Training model (this may take 10-30 minutes)...")
+    progress_bar.progress(50)
+    
     trainer.train()
+    
+    status_text.text("Step 5: Saving model...")
+    progress_bar.progress(90)
     
     # Save locally (commit this folder to GitHub for deployment)
     trainer.save_model('fine_tuned_combined')
     tokenizer.save_pretrained('fine_tuned_combined')
     
-    st.write("Fine-tuning complete. Model saved to 'fine_tuned_combined' folder. Commit this folder to GitHub.")
+    progress_bar.progress(100)
+    status_text.text("Fine-tuning complete. Model saved to 'fine_tuned_combined' folder. Commit to GitHub.")
+    st.success("Done! Now set FINE_TUNE_MODE=False and deploy.")
 
 # Run fine-tuning if enabled (only locally)
 if FINE_TUNE_MODE:
@@ -80,8 +113,7 @@ if FINE_TUNE_MODE:
 # Cache for performance
 @st.cache_resource
 def load_generation_model():
-    # Load from local saved folder (must be in GitHub repo for deployment)
-    path = 'fine_tuned_combined' if not FINE_TUNE_MODE else 'distilgpt2'  # Use saved model for deployment
+    path = 'fine_tuned_combined' if not FINE_TUNE_MODE else 'distilgpt2'  # Loads from local folder in repo
     tokenizer = AutoTokenizer.from_pretrained(path, clean_up_tokenization_spaces=False)  # Fixes issue #31884
     model = AutoModelForCausalLM.from_pretrained(path)
     return tokenizer, model
