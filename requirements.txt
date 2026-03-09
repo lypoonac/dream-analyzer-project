@@ -1,4 +1,5 @@
 streamlit==1.38.0
 transformers==4.44.2
-torch==2.0.1  # Compatible version for Streamlit Cloud (CPU)
-datasets==2.21.0  # If needed for any scripts, but optional for app
+torch==2.0.1  # Compatible with 3.10, CPU-only for Streamlit
+datasets==2.21.0  # For fine-tuning (optional for runtime)
+pillow==10.0.0  # Older version to avoid build errors
