@@ -4,4 +4,4 @@ torch==2.0.1
 datasets==2.21.0
 numpy==1.26.4
 pillow==10.0.0
-accelerate==0.45.0  # Required for Trainer
+accelerate>=0.21.0  # Flexible version to fix "no matching distribution" error; installs latest compatible
