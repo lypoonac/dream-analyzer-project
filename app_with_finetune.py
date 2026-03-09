@@ -7,7 +7,7 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, Trainer, TrainingArguments
 
 # Toggle for fine-tuning (Set to True locally to train and save model; False for Streamlit deployment)
-FINE_TUNE_MODE = True  # Change to True for local fine-tuning
+FINE_TUNE_MODE = False  # Change to True for local fine-tuning
 
 # Get absolute path to repo root (works on local and Streamlit Cloud)
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
