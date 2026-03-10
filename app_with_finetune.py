@@ -1,120 +1,115 @@
-import streamlit as st
+# Step 1: Install a specific version of transformers to ensure compatibility (run this first)
+!pip uninstall -y transformers  # Remove any existing version
+!pip install transformers==4.41.2 datasets torch accelerate numpy pandas
+
+# Step 2: Import libraries
+import pandas as pd
+import random
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 import os
-import time  # For timeout
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+import shutil  # For zipping the folder
+import transformers  # To check version
+print(f"Transformers version: {transformers.__version__}")
 
-# Get absolute path to repo root (works on local and Streamlit Cloud)
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Fine-tuning function
+def fine_tune_model(csv_path='/content/base_zhou_gong.csv', save_path='/content/fine_tuned_combined'):
+    print("Starting fine-tuning in Colab...")
 
-# Global variables for models (loaded on demand)
-gen_tokenizer = None
-gen_model = None
-stress_classifier = None
-
-# Cache for generation model (pre-trained from HF)
-@st.cache_resource
-def load_generation_model_cached():
-    start_time = time.time()
-    path = 'distilgpt2'  # Lightweight pre-trained text generation model from https://huggingface.co/models
-    tokenizer = AutoTokenizer.from_pretrained(path, clean_up_tokenization_spaces=False)  # Fixes issue #31884
-    model = AutoModelForCausalLM.from_pretrained(path)
+    # Load dataset with error check
+    if not os.path.exists(csv_path):
+        print(f"Error: Dataset file '{csv_path}' not found! Upload it to Colab.")
+        return
     
-    if time.time() - start_time > 120:  # Timeout after 2 min
-        st.warning("Loading took too long.")
+    df = pd.read_csv(csv_path)
+    if 'dream_text' not in df.columns or 'interpretation' not in df.columns:
+        print("Error: CSV must have 'dream_text' and 'interpretation' columns!")
+        return
     
-    return tokenizer, model
-
-# Cache for stress pipeline (pre-trained from HF)
-@st.cache_resource
-def load_stress_pipeline_cached():
-    start_time = time.time()
-    pipe = pipeline('text-classification', model='bhadresh-savani/distilbert-base-uncased-emotion')  # Pre-trained emotion model
-    if time.time() - start_time > 60:  # Timeout after 1 min
-        st.warning("Stress model loading slow—app may be limited on resources.")
-    return pipe
-
-# Function to load all models with progress
-def load_all_models():
-    global gen_tokenizer, gen_model, stress_classifier
-    progress_bar = st.progress(0)
-    status = st.empty()
+    # Synthetic data
+    stress_levels = ['Low', 'Medium', 'High']
+    rec_templates = [
+        "Practice mindfulness to maintain calm.",
+        "Seek support from friends or professionals if stress persists.",
+        "Engage in exercise or hobbies to reduce anxiety."
+    ]
     
-    status.text("Loading generation model (Step 1/2)...")
-    gen_tokenizer, gen_model = load_generation_model_cached()
-    progress_bar.progress(50)
+    combined_data = []
+    for i, (_, row) in enumerate(df.iterrows()):
+        stress = random.choice(stress_levels)
+        rec = random.choice(rec_templates)
+        prompt = f"Dream: {row['dream_text']} Interpretation: {row['interpretation']} Stress: {stress} Recommendation: {rec}"
+        combined_data.append({'prompt': prompt})
+        if i % 50 == 0:
+            print(f"Prepared {i}/{len(df)} prompts...")
     
-    status.text("Loading stress classification model (Step 2/2)...")
-    stress_classifier = load_stress_pipeline_cached()
-    progress_bar.progress(100)
+    combined_df = pd.DataFrame(combined_data)
+    combined_df.to_csv('/content/combined_training_data.csv', index=False)
+    print("Dataset prepared and saved.")
     
-    if gen_tokenizer is None or gen_model is None or stress_classifier is None:
-        st.error("Failed to load models! Try rebooting or check resources.")
-        return False
-    status.text("Models loaded successfully!")
-    return True
-
-# Pipeline 1: Detect stress (pre-trained HF model)
-def detect_stress(dream_text):
-    if not dream_text.strip():
-        return 'Unknown'
-    result = stress_classifier(dream_text)[0]
-    emotion = result['label']
-    if emotion in ['fear', 'sadness']:
-        return 'High'
-    elif emotion in ['anger', 'disgust']:
-        return 'Medium'
-    else:
-        return 'Low'
-
-# Pipeline 2: Generate interpretation + recommendation (pre-trained HF model)
-def generate_interp_rec(dream_text, stress_level):
-    if not dream_text.strip():
-        return "Invalid input.", "Please provide a dream description."
-    prompt = f"Interpret this dream using Zhou Gong's method: {dream_text}. Stress level: {stress_level}. Provide interpretation and recommendation.\nInterpretation:\nRecommendation:"
-    inputs = gen_tokenizer(prompt, return_tensors='pt')
-    outputs = gen_model.generate(**inputs, max_length=200, num_return_sequences=1, temperature=0.8, do_sample=True, top_p=0.95)
-    generated = gen_tokenizer.decode(outputs[0], skip_special_tokens=True).split(prompt)[-1].strip()  # Remove prompt from output
+    # Load for training
+    dataset = load_dataset('csv', data_files='/content/combined_training_data.csv')
+    if len(dataset['train']) == 0:
+        print("Error: Generated dataset is empty! Check CSV data.")
+        return
+    dataset = dataset['train'].train_test_split(test_size=0.2)
+    print(f"Dataset split: {len(dataset['train'])} train, {len(dataset['test'])} test examples.")
     
-    # Split and fallback
-    if "Recommendation:" in generated:
-        parts = generated.split("Recommendation:")
-        interp = parts[0].replace("Interpretation:", "").strip()
-        rec = parts[1].strip()
-    else:
-        interp = generated
-        rec = "General recommendation: Reflect on emotions and relax."
+    # Tokenizer
+    tokenizer = AutoTokenizer.from_pretrained('distilgpt2', clean_up_tokenization_spaces=False)
+    tokenizer.pad_token = tokenizer.eos_token
     
-    return interp, rec
-
-# Streamlit UI
-st.title("Dream Analyzer Business App")
-st.write("Enter your dream description (in English) to get a Zhou Gong interpretation, stress level, and personalized recommendations.")
-
-# Button to load models (avoids blocking startup)
-if st.button("Load Models (if stuck, click to retry)"):
-    load_all_models()
+    print("Tokenizing dataset...")
+    def tokenize_function(examples):
+        tokenized = tokenizer(examples['prompt'], padding='max_length', truncation=True, max_length=256)
+        tokenized['labels'] = tokenized['input_ids'].copy()  # Add labels for causal LM loss
+        return tokenized
+    
+    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    
+    # Check if labels are present
+    if 'labels' not in tokenized_dataset['train'].column_names:
+        print("Error: Labels not added to dataset! Fine-tuning cannot proceed.")
+        return
+    
+    # Model (ignore unexpected keys like attn.bias, as it's safe for distilgpt2)
+    model = AutoModelForCausalLM.from_pretrained('distilgpt2', ignore_mismatched_sizes=True)
+    
+    # Training args (reduced for speed: smaller batch, 1 epoch for testing)
+    # Omitted eval_strategy to avoid version conflicts; defaults to 'no' (no evaluation during training)
+    training_args = TrainingArguments(
+        output_dir='/content/results',
+        num_train_epochs=1,  # Start with 1; increase to 5 once working
+        per_device_train_batch_size=2,  # Small for free Colab GPU
+        save_steps=100,
+        save_total_limit=2,
+        logging_steps=10,  # Frequent logging
+        fp16=True,  # Enable mixed precision for GPU speed
+    )
+    
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_dataset['train'],
+        eval_dataset=tokenized_dataset['test'],
+    )
+    
+    print("Starting training... (monitor progress below)")
     try:
-        st.rerun()  # Refresh to update UI
-    except:
-        pass  # Continue if rerun fails
+        trainer.train()
+    except Exception as e:
+        print(f"Training error: {e}")
+        return
+    
+    print("Saving model...")
+    trainer.save_model(save_path)
+    tokenizer.save_pretrained(save_path)
+    
+    print("Fine-tuning complete. Model saved to 'fine_tuned_combined' folder.")
+    
+    # Zip the folder for easy download
+    shutil.make_archive('/content/fine_tuned_combined', 'zip', save_path)
+    print("Zipped folder created: /content/fine_tuned_combined.zip. Download it from Colab Files sidebar.")
 
-dream_input = st.text_area("Describe your dream:", height=150)
-if st.button("Analyze Dream"):
-    if dream_input.strip():
-        if gen_tokenizer is None or gen_model is None or stress_classifier is None:
-            st.error("Models not loaded! Click 'Load Models' and wait.")
-        else:
-            with st.spinner("Analyzing your dream (if stuck, resources may be low)..."):
-                stress_level = detect_stress(dream_input)
-                interpretation, recommendation = generate_interp_rec(dream_input, stress_level)
-                
-                st.subheader("Estimated Stress Level")
-                st.write(stress_level)
-                
-                st.subheader("Zhou Gong Interpretation")
-                st.write(interpretation)
-                
-                st.subheader("Personalized Recommendation")
-                st.write(recommendation)
-    else:
-        st.error("Please enter a dream description.")
+# Run the function (upload your CSV first if not already)
+fine_tune_model(csv_path='/content/base_zhou_gong.csv')  # Adjust path if your CSV is named differently
